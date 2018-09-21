@@ -1,0 +1,65 @@
+#Log into your HPC account
+#Navigate to the folder where you have your fastq and mapping files
+
+#This script is based on the wonderful tutorial by Tom Battaglia
+#https://twbattaglia.gitbooks.io/introduction-to-qiime/content/
+
+module load qiime/1.9.1
+module unload r
+module load r/3.3.2
+
+
+#The reverse reads need to be re-labeled so that they match the forward reads
+sed 's/2:N:0:/1:N:0:/g' lane1_NoIndex_L001_R2_001.fastq > lane1_NoIndex_L001_R2_001_fixed.fastq
+
+
+#Here we join the paired reads from file R1 (forward reads) and R3 (reverse reads)
+#The barcodes are contained in file R1
+#check that the output file isn't empty when this is done
+#That can be done using: ls -l to see the sizes of the files in the new folder called join_pe_reads
+join_paired_ends.py -f lane1_NoIndex_L001_R1_001.fastq -r lane1_NoIndex_L001_R3_001.fastq -b lane1_NoIndex_L001_R2_001_fixed.fastq -o join_pe_reads -m fastq-join -j 40 -p 75
+
+#Move the mapping file to the folder you just created
+mv metadata.txt join_pe_reads
+
+#Here we identify samples based on barcodes, and do some quality filtering
+#-q is the minimum base quality score to retain a nucleotide
+#-p is the minimum number of high quality nucleotides to include a read
+#This is where you might have issues if your barcodes are reverse or complement of what they should be
+split_libraries_fastq.py -i fastqjoin.join.fastq -o split_libraries_reverse -b fastqjoin.join_barcodes.fastq -m metadata.txt  -q 20 -p 0.75 --barcode_type 12 --rev_comp_mapping_barcodes
+
+#This is where sequences get clustered and assigned to taxa, and takes a long time
+#nohup means that this will run in the background
+#so you can do other work and close your computer/terminal window while it runs for a couple days
+nohup pick_open_reference_otus.py -o OTU -i seqs.fna &
+
+#If you're worried about chimeric sequences, here is where you'd need to deal with that
+
+#Summarize OTU counts per sample data
+biom summarize-table -i otu_table_mc2_w_tax_no_pynast_failures.biom > summary_statistics.txt
+
+
+summarize_taxa.py -i otu_table_mc2_w_tax_no_pynast_failures.biom -o summary_taxa_nochimera
+
+
+#Run beta diversity analysis and visualize with PCoA
+beta_diversity_through_plots.py -i otu_table_mc2_w_tax_no_pynast_failures.biom -m metadata.txt -o betaPCA_all2 -t rep_set.tre
+
+#zip your PCoA folder
+gzip betaPCA_allfile 
+
+#Open up another terminal window and navigate to the location where you want to save your PCoA output
+#Copy that zipped folder to this location
+scp –r <Kerberos ID>@phoenix.med.nyu.edu:/ifs/home/<file_locaiton>/join_pe_reads/split_libraries_reverse/OTU/betaPCA_allfile.gz . 
+
+#Also copy over biom file to this location 
+scp <Kerberos ID>@phoenix.med.nyu.edu:/ifs/home/<file_locaiton>/join_pe_reads/split_libraries_reverse/OTU/otu_table_mc2_w_tax_no_pynast_failures.biom .
+
+core_diversity_analyses.py \
+ -i otu_table_mc2_w_tax_no_pynast_failures.biom \
+ -o core_output \
+ -m metadata.txt \
+ -c Day,Kind \
+ -t rep_set.tre \
+ -e 1000 \
+ --recover_from_failure
