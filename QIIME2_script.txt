@@ -1,0 +1,140 @@
+#Old NYU cluster
+ssh <your Kerberos ID>@phoenix.med.nyu.edu
+module load metaseq/0.5.5.4
+source activate qiime2-2018.2
+
+#New NYU cluster (Big Purple)
+ssh <your Kerberos ID>@bigpurple.nyumc.org
+module add miniconda2/4.5.4
+source activate qiime2-2018.8
+
+
+#Navigate to the folder where you have your fastq and mapping files
+
+#Modify barcode header names
+sed 's/2:N:0:/1:N:0:/g' lane1_NoIndex_L001_R2_001.fastq > lane1_NoIndex_L001_R2_001_fixed.fastq
+
+#Import files into right format ( files must be named barcodes.fastq.qz, forward.fastq.qz and reverse.fastq.qz)
+qiime tools import \
+--type EMPPairedEndSequences \
+--input-path emp-paired-end-sequences \
+--output-path emp-paired-end-sequences.qza
+
+#demultiplexing, accounting for reverse mapping codes
+qiime demux emp-paired \
+--i-seqs emp-paired-end-sequences.qza \
+--m-barcodes-file metadata.txt \
+--m-barcodes-column BarcodeSequence \
+--p-rev-comp-mapping-barcodes \
+--o-per-sample-sequences demux.qza
+
+#Make a visualization you can check at: https://view.qiime2.org/
+qiime demux summarize \
+--i-data demux.qza \
+--o-visualization demux.qzv
+
+#de-noise and trim to 140 bp. 
+#I only got 2 sequences in the output files when I used 120...
+#140 worked, but I'm just checking 150 to see if it's much different
+qiime dada2 denoise-paired \
+--i-demultiplexed-seqs demux.qza \
+--p-trunc-len-f 150 \
+--p-trunc-len-r 150 \
+--o-representative-sequences rep-seqs-dada2_150.qza \
+--o-table table-dada2_150.qza
+
+#summarize data in a way that can be viewed on the QIIME2 viewer
+qiime feature-table summarize \
+--i-table table-dada2.qza \
+--o-visualization table.qzv \
+--m-sample-metadata-file metadata.txt
+qiime feature-table tabulate-seqs \
+--i-data rep-seqs-dada2.qza \
+--o-visualization rep-seqs.qzv
+
+
+#make a phylogenetic tree
+qiime alignment mafft \
+--i-sequences rep-seqs-dada2.qza \
+--o-alignment aligned-rep-seqs.qza
+
+qiime alignment mask \
+--i-alignment aligned-rep-seqs.qza \
+--o-masked-alignment masked-aligned-rep-seqs.qza
+
+qiime phylogeny fasttree \
+--i-alignment masked-aligned-rep-seqs.qza \
+--o-tree unrooted-tree.qza
+
+qiime phylogeny midpoint-root \
+--i-tree unrooted-tree.qza \
+--o-rooted-tree rooted-tree.qza
+
+#Produce a graphic that shows the impact of rarefaction (sampling at different depths) on alpha diversity of each sample
+#These are also called ‘collectors curves’
+qiime diversity alpha-rarefaction \
+--i-table table-dada2.qza \
+--i-phylogeny rooted-tree.qza \
+--p-max-depth 4000 \
+--m-metadata-file metadata.txt \
+--o-visualization alpha-rarefaction.qzv
+
+#calculate a whole bunch of diversity metrics all at once
+#input a sample-depth value (set at 1109 reads in the example online) based on the alpha-rarefaction analysis above 
+#Actually I made it based on the file table-dada2.qza
+
+qiime diversity core-metrics-phylogenetic \
+--i-phylogeny rooted-tree.qza \
+--i-table table-dada2.qza \
+--p-sampling-depth 37968 \
+--m-metadata-file metadata.txt \
+--output-dir core-metrics-results
+
+qiime diversity alpha-group-significance \
+--i-alpha-diversity core-metrics-results/evenness_vector.qza \
+--m-metadata-file metadata.txt \
+--o-visualization core-metrics-results/evenness-group-significance.qzv
+
+qiime diversity beta-group-significance \
+--i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \
+--m-metadata-file metadata.txt \
+--m-metadata-column Kind \
+--o-visualization core-metrics-results/unweighted-unifrac-kind-significance.qzv \
+--p-pairwise
+
+#There's some stuff in the instructions that I can't do, possibly because of the setup of my metadata file
+
+#download OTU classifier
+wget -O "gg-13-8-99-515-806-nb-classifier.qza" "https://data.qiime2.org/2018.2/common/gg-13-8-99-515-806-nb-classifier.qza"
+
+#assign taxonomy to sequences
+qiime feature-classifier classify-sklearn \
+--i-classifier gg-13-8-99-515-806-nb-classifier.qza \
+--i-reads rep-seqs-dada2.qza \
+--o-classification taxonomy.qza
+
+qiime metadata tabulate \
+--m-input-file taxonomy.qza \
+--o-visualization taxonomy.qzv
+
+qiime taxa barplot \
+--i-table table-dada2.qza \
+--i-taxonomy taxonomy.qza \
+--m-metadata-file metadata.txt \
+--o-visualization taxa-bar-plots.qzv
+
+
+#If you need to get a file onto your computer, go to another window, navigate to Documents (or wherever you want to save the file), then do this and type in your HPC password
+#Works on old NYU HPC
+scp <your Kerberos ID>@phoenix.med.nyu.edu:/ifs/home/<folder_name>/demux.qzv .
+
+#To get folders on your computer onto your HPC cluster
+scp lane1_NoIndex_L001_R1_001.fastq <your Kerberos ID>@phoenix.med.nyu.edu:/ifs/home/<folder_name>
+  
+  
+#How to visualize output:
+#In Chrome, go to https://view.qiime2.org/ and drop the .qzv file into the “drag and drop” box
+  
+#How to do more analyses of alpha and beta diversity by comparison group:
+# https://docs.qiime2.org/2018.2/tutorials/moving-pictures/
+#Go to section called: Alpha and beta diversity analysis
